@@ -21,12 +21,12 @@ npm install
 
 ```
 node export-products.js \
-  --site-url https://andersen--ecommpilot.sandbox.my.site.com/AndersenPartsStore \
-  --brand Andersen \
-  --pricebook-id 01sWr000001MTHKIA4 \
-  --sf-org ecommpilot \
-  --webstore-id 0ZEWr0000003iXZOAY \
-  --policy-id 1CeWr0000003arlKAA \
+  --site-url https://myorg--sandbox.sandbox.my.site.com/MyStore \
+  --brand Nabisco \
+  --pricebook-id 01sXXXXXXXXXXXXXXX \
+  --sf-org MySFOrg \
+  --webstore-id 0ZEXXXXXXXXXXXXXXX \
+  --policy-id 1CeXXXXXXXXXXXXXXX \
   --output ./coveo-export.json
 ```
 
@@ -35,7 +35,7 @@ node export-products.js \
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `--site-url` | Yes | Storefront URL prefix for `documentId` / `clickUri` / image URLs |
-| `--brand` | Yes | Value emitted in `ec_brand` (e.g. `Andersen`) |
+| `--brand` | Yes | Value emitted in `ec_brand` |
 | `--pricebook-id` | Yes | Pricebook whose `PricebookEntry` rows supply `ec_price` |
 | `--sf-org` | Yes | SF CLI org alias used for authentication |
 | `--webstore-id` | Yes | WebStore Id; used to derive the product catalog scope |
