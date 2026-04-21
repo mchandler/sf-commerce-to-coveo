@@ -11,7 +11,7 @@ const {
   fetchPriceByProductId,
   fetchVariantParentMap,
   fetchProducts,
-  fetchVariantAttributes,
+  // fetchVariantAttributes,  // unused while attribute source = Product2
   fetchCategoriesForCatalog,
   fetchProductCategoryLinks,
   fetchMedia,
@@ -157,14 +157,21 @@ async function main() {
   const dropNote = dropped > 0 ? ` (${dropped} dropped from scope as inactive, VariationParent, or unchanged)` : '';
   s6.done(`${products.length} Product2 rows${dropNote}`);
 
-  const s7 = stageStart('attributes');
-  const variantIds = products
-    .filter((p) => p.ProductClass === 'Variation')
-    .map((p) => p.Id);
-  const attrRows = await fetchVariantAttributes(client, variantIds);
-  const attrByProduct = new Map();
-  for (const r of attrRows) attrByProduct.set(r.ProductId, r);
-  s7.done(`${attrRows.length} ProductAttribute rows for ${variantIds.length} variants`);
+  // Attribute source currently = Product2 (values pulled in fetchProducts
+  // above). The ProductAttribute fetch below is commented out while the
+  // data team is only confident in Product2-sourced attribute data. To
+  // revert: uncomment this block, uncomment the ProductAttribute iteration
+  // in lib/document.js, add `productAttr` back to the buildDocument call
+  // below, and remove ATTRIBUTE_FIELDS_FROM_PRODUCT2 from the SELECT in
+  // lib/lookups.js fetchProducts.
+  // const s7 = stageStart('attributes');
+  // const variantIds = products
+  //   .filter((p) => p.ProductClass === 'Variation')
+  //   .map((p) => p.Id);
+  // const attrRows = await fetchVariantAttributes(client, variantIds);
+  // const attrByProduct = new Map();
+  // for (const r of attrRows) attrByProduct.set(r.ProductId, r);
+  // s7.done(`${attrRows.length} ProductAttribute rows for ${variantIds.length} variants`);
 
   const s8 = stageStart('categories');
   const [categoryRows, productCategoryRows] = await Promise.all([
@@ -220,7 +227,7 @@ async function main() {
 
     const doc = buildDocument({
       product: p,
-      productAttr: attrByProduct.get(p.Id) || null,
+      // productAttr: attrByProduct.get(p.Id) || null,  // revert path: uncomment with the attributes stage above
       categoryPaths: Array.from(pathsByProduct.get(p.Id) || []),
       imageUrls: imagesByProduct.get(p.Id) || null,
       price,
