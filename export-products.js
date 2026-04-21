@@ -48,6 +48,17 @@ function buildScope({ entitledParents, priceByProduct, variantParentById, includ
   return scope;
 }
 
+// Fisher–Yates in place. Used only when --limit is applied, so a small
+// limit still samples across entitled parents AND their variant children
+// rather than taking the first N insertion entries (which are all parents).
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 const IMAGE_CONTENT_TYPES = new Set(['cms_image', 'sfdc_cms__image']);
 
 function buildImageUrlsByProduct(mediaRows, siteUrl) {
@@ -122,10 +133,12 @@ async function main() {
   const preLimitSize = scope.size;
   let scopeIds = Array.from(scope);
   if (cfg.limit != null && scopeIds.length > cfg.limit) {
+    shuffle(scopeIds);
     scopeIds = scopeIds.slice(0, cfg.limit);
     scope = new Set(scopeIds);
   }
-  s5.done(`${scope.size} products in scope${cfg.limit != null ? ` (limited from ${preLimitSize})` : ''}`);
+  const sampledNote = preLimitSize > scope.size ? ` (sampled from ${preLimitSize})` : '';
+  s5.done(`${scope.size} products in scope${sampledNote}`);
 
   if (scope.size === 0) {
     log('No products in scope. Exiting.');
@@ -136,8 +149,13 @@ async function main() {
 
   const s6 = stageStart('products');
   const products = await fetchProducts(client, scopeIds, cfg.updatedAfter);
-  s6.done(`${products.length} Product2 rows` +
-    (cfg.updatedAfter ? ` (filtered by LastModifiedDate >= ${cfg.updatedAfter})` : ''));
+  const dropped = scope.size - products.length;
+  // The drop can come from three filters in fetchProducts' SOQL:
+  //   - IsActive = false
+  //   - ProductClass = 'VariationParent' (excluded by spec rule #3)
+  //   - LastModifiedDate < :updatedAfter (when --updated-after is set)
+  const dropNote = dropped > 0 ? ` (${dropped} dropped from scope as inactive, VariationParent, or unchanged)` : '';
+  s6.done(`${products.length} Product2 rows${dropNote}`);
 
   const s7 = stageStart('attributes');
   const variantIds = products
