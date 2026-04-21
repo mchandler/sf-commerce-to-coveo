@@ -1,4 +1,5 @@
 node_modules/
 coveo-export-*.json
+Coveo-Product-Import-NodeScript.md
 .DS_Store
 npm-debug.log*

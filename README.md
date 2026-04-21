@@ -2,8 +2,6 @@
 
 Node.js CLI that generates a Coveo-ready product catalog JSON from Salesforce B2B Commerce data. Replaces the Saltbox-to-Coveo Transformer, closing its gaps: includes variant children, emits `ec_item_group_id` for variant grouping, populates `ec_price` on every in-pricebook product, emits `ec_shortdesc` / `clickUri` / `fileExtension`, and uses JSON arrays for multi-value fields.
 
-Design spec: [`Coveo-Product-Import-NodeScript.md`](./Coveo-Product-Import-NodeScript.md).
-
 ## Prerequisites
 
 - Node.js 18+
