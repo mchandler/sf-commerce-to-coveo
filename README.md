@@ -41,6 +41,7 @@ node export-products.js \
 | `--output` | Yes | Path to write the generated JSON file |
 | `--updated-after` | No | ISO-8601 datetime. Restrict output to products with `LastModifiedDate >= :date` (see spec §Incremental Runs) |
 | `--limit` | No | Cap the number of products for smoke-testing. Applied after scope filtering. |
+| `--include-unpriced` | No | Emit documents for entitled products even when no active `PricebookEntry` exists; missing prices default to `0`. Also writes a sidecar `<output-basename>-unpriced.csv` listing every such product. Useful for surfacing gaps in the pricebook. |
 
 ## Output
 

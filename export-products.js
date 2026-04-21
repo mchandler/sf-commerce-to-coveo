@@ -19,9 +19,22 @@ const {
 const { buildCategoryPaths } = require('./lib/categories');
 const { buildDocument, buildImageUrl } = require('./lib/document');
 const { createStreamWriter } = require('./lib/stream-writer');
+const { createUnpricedLog } = require('./lib/unpriced-log');
 
-function buildScope({ entitledParents, priceByProduct, variantParentById }) {
+function buildScope({ entitledParents, priceByProduct, variantParentById, includeUnpriced }) {
   const scope = new Set();
+  if (includeUnpriced) {
+    // Entitled-driven: every entitled Product2 plus the variant children of
+    // entitled parents. VariationParents themselves get filtered out later
+    // by the ProductClass clause in fetchProducts.
+    for (const id of entitledParents) scope.add(id);
+    for (const [childId, parentId] of variantParentById.entries()) {
+      if (entitledParents.has(parentId)) scope.add(childId);
+    }
+    return scope;
+  }
+  // Priced-driven (default): every priced product that is entitled directly
+  // or whose variant parent is entitled.
   for (const productId of priceByProduct.keys()) {
     if (entitledParents.has(productId)) {
       scope.add(productId);
@@ -73,6 +86,7 @@ async function main() {
   log(`Output:      ${cfg.output}`);
   if (cfg.updatedAfter) log(`Updated after: ${cfg.updatedAfter}`);
   if (cfg.limit != null) log(`Limit:       ${cfg.limit}`);
+  if (cfg.includeUnpriced) log(`Include unpriced: on (ec_price=0 when no PricebookEntry; sidecar CSV emitted)`);
   log('');
 
   const session = createSession(cfg.sfOrg);
@@ -99,13 +113,19 @@ async function main() {
   s4.done(`${variantParentById.size} variant→parent pairs`);
 
   const s5 = stageStart('scope');
-  let scope = buildScope({ entitledParents, priceByProduct, variantParentById });
+  let scope = buildScope({
+    entitledParents,
+    priceByProduct,
+    variantParentById,
+    includeUnpriced: cfg.includeUnpriced,
+  });
+  const preLimitSize = scope.size;
   let scopeIds = Array.from(scope);
   if (cfg.limit != null && scopeIds.length > cfg.limit) {
     scopeIds = scopeIds.slice(0, cfg.limit);
     scope = new Set(scopeIds);
   }
-  s5.done(`${scope.size} products in scope${cfg.limit != null ? ` (limited from ${priceByProduct.size})` : ''}`);
+  s5.done(`${scope.size} products in scope${cfg.limit != null ? ` (limited from ${preLimitSize})` : ''}`);
 
   if (scope.size === 0) {
     log('No products in scope. Exiting.');
@@ -150,10 +170,12 @@ async function main() {
 
   const s10 = stageStart('assemble');
   const writer = createStreamWriter(cfg.output);
+  const unpricedLog = cfg.includeUnpriced ? createUnpricedLog(cfg.output) : null;
   let missingProductCodeCount = 0;
   const missingProductCodeSamples = [];
   let variantCount = 0;
   let simpleCount = 0;
+  let unpricedCount = 0;
 
   for (const p of products) {
     if (!p.ProductCode) {
@@ -165,22 +187,38 @@ async function main() {
     const variantParentId = isVariant ? (variantParentById.get(p.Id) || null) : null;
     if (isVariant) variantCount++; else simpleCount++;
 
+    const price = priceByProduct.get(p.Id) ?? null;
+    if (cfg.includeUnpriced && price == null) {
+      unpricedCount++;
+      unpricedLog.log({
+        ProductId: p.Id,
+        ProductCode: p.ProductCode,
+        StockKeepingUnit: p.StockKeepingUnit,
+        Name: p.Name,
+        ProductClass: p.ProductClass,
+        ParentId: variantParentId || '',
+      });
+    }
+
     const doc = buildDocument({
       product: p,
       productAttr: attrByProduct.get(p.Id) || null,
       categoryPaths: Array.from(pathsByProduct.get(p.Id) || []),
       imageUrls: imagesByProduct.get(p.Id) || null,
-      price: priceByProduct.get(p.Id) ?? null,
+      price,
       variantParentId,
       siteUrl: cfg.siteUrl,
       brand: cfg.brand,
+      includeUnpriced: cfg.includeUnpriced,
     });
     writer.write(doc);
   }
 
   const count = await writer.close();
+  if (unpricedLog) await unpricedLog.close();
+  const unpricedSuffix = cfg.includeUnpriced ? `; ${unpricedCount} without PricebookEntry` : '';
   s10.done(
-    `${count} documents written (${simpleCount} Simple, ${variantCount} Variation)`,
+    `${count} documents written (${simpleCount} Simple, ${variantCount} Variation${unpricedSuffix})`,
   );
 
   if (missingProductCodeCount > 0) {
@@ -193,6 +231,9 @@ async function main() {
 
   log('');
   log(`Wrote ${count} documents to ${cfg.output}`);
+  if (unpricedLog && unpricedLog.count > 0) {
+    log(`Wrote ${unpricedLog.count} unpriced rows to ${unpricedLog.file}`);
+  }
   log(`Total elapsed: ${formatDuration(Date.now() - started)}`);
 }
 
