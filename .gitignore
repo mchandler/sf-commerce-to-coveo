@@ -1,0 +1,4 @@
+node_modules/
+coveo-export-*.json
+.DS_Store
+npm-debug.log*

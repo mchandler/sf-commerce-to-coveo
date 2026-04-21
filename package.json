@@ -1,0 +1,12 @@
+{
+  "name": "sf-commerce-to-coveo",
+  "version": "0.1.0",
+  "description": "Generates a Coveo-ready product catalog JSON from Salesforce B2B Commerce data, replacing the Saltbox Transformer.",
+  "main": "export-products.js",
+  "scripts": {
+    "start": "node export-products.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
