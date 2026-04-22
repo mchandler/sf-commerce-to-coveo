@@ -94,11 +94,9 @@ async function main() {
     log('');
     log('Dry-run complete. Would perform:');
     log(`  0. Interactive prompt: confirm source ID = ${cfg.sourceId}`);
-    log(`  1. POST /push/v1/organizations/${cfg.orgId}/sources/${cfg.sourceId}/status?statusType=REBUILD`);
-    log(`  2. POST /push/v1/organizations/${cfg.orgId}/sources/${cfg.sourceId}/stream/open`);
-    log(`  3. PUT <uploadUri> (${formatBytes(bytes.length)})`);
-    log(`  4. POST /push/v1/organizations/${cfg.orgId}/sources/${cfg.sourceId}/stream/<streamId>/close`);
-    log(`  5. POST /push/v1/organizations/${cfg.orgId}/sources/${cfg.sourceId}/status?statusType=IDLE`);
+    log(`  1. POST /push/v1/organizations/${cfg.orgId}/sources/${cfg.sourceId}/stream/open`);
+    log(`  2. PUT <uploadUri> (${formatBytes(bytes.length)})`);
+    log(`  3. POST /push/v1/organizations/${cfg.orgId}/sources/${cfg.sourceId}/stream/<streamId>/close`);
     log('');
     log('Re-run without --dry-run to actually push.');
     return;
@@ -131,33 +129,29 @@ async function main() {
   let streamId = null;
 
   try {
-    const s2 = stageStart('set-rebuild');
-    await client.setSourceStatus('REBUILD');
-    s2.done('source status = REBUILD');
-
-    const s3 = stageStart('stream-open');
+    // NOTE: we do NOT call setSourceStatus('REBUILD'/'IDLE') here. Those
+    // toggles are from the legacy Push API and return 412
+    // SOURCE_IS_STREAM_ENABLED against stream-enabled Catalog sources.
+    // stream/open and stream/close manage the source state implicitly.
+    const s2 = stageStart('stream-open');
     const opened = await client.streamOpen();
     if (!opened || !opened.streamId || !opened.uploadUri || !opened.fileId) {
       throw new Error(`Unexpected stream/open response: ${JSON.stringify(opened).slice(0, 300)}`);
     }
     streamId = opened.streamId;
-    s3.done(`streamId = ${streamId} | fileId = ${opened.fileId}`);
+    s2.done(`streamId = ${streamId} | fileId = ${opened.fileId}`);
 
-    const s4 = stageStart('upload');
+    const s3 = stageStart('upload');
     await client.putToS3(opened.uploadUri, opened.requiredHeaders || {}, bytes);
-    s4.done(`${formatBytes(bytes.length)} uploaded to S3`);
+    s3.done(`${formatBytes(bytes.length)} uploaded to S3`);
 
-    const s5 = stageStart('stream-close');
+    const s4 = stageStart('stream-close');
     const closeResp = await client.streamClose(streamId);
     const respSuffix = closeResp && typeof closeResp === 'object'
       ? ` | orderingId=${closeResp.orderingId || '?'} requestId=${closeResp.requestId || '?'}`
       : '';
-    s5.done(`stream closed${respSuffix}`);
+    s4.done(`stream closed${respSuffix}`);
     streamId = null; // successfully closed; no cleanup owed
-
-    const s6 = stageStart('set-idle');
-    await client.setSourceStatus('IDLE');
-    s6.done('source status = IDLE');
 
     log('');
     log(`Rebuild complete. ${addOrUpdate.length} documents pushed; source contents replaced.`);
@@ -165,15 +159,13 @@ async function main() {
     log('Note: it may take a few minutes for documents to appear in search.');
   } catch (err) {
     // If stream/open succeeded but a later step failed, the stream is still
-    // open on Coveo's side and the source is in REBUILD. Surface this so the
-    // operator can clean it up manually via the Coveo console. Orphaned
-    // streams are eventually discarded, but leaving the source in REBUILD
-    // status can block other pushes.
+    // open on Coveo's side. Surface the streamId so the operator can close
+    // it manually via the Coveo console. Orphaned streams are eventually
+    // discarded by Coveo, but leaving one open can block subsequent pushes.
     if (streamId) {
       console.error('');
       console.error(`WARNING: stream ${streamId} is still open on source ${cfg.sourceId}.`);
-      console.error(`         Source status may be stuck at REBUILD until the stream is`);
-      console.error(`         closed or discarded. Use the Coveo console to reset.`);
+      console.error(`         Close it via the Coveo console before retrying.`);
     }
     throw err;
   }

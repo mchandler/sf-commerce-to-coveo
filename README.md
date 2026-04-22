@@ -115,13 +115,11 @@ node coveo-full-rebuild.js \
 ### Flow
 
 1. Interactive confirm prompt (typed source Id must match `--source-id`)
-2. `POST .../status?statusType=REBUILD` — mark the source as rebuilding
-3. `POST .../stream/open` → obtain `streamId`, `uploadUri`, `fileId`
-4. `PUT <uploadUri>` → upload the JSON content
-5. `POST .../stream/{streamId}/close` → commit the replace-all
-6. `POST .../status?statusType=IDLE` — return the source to normal state
+2. `POST .../stream/open` → obtain `streamId`, `uploadUri`, `fileId`
+3. `PUT <uploadUri>` → upload the JSON content
+4. `POST .../stream/{streamId}/close` → commit the replace-all
 
-If a step after `stream/open` fails, the script prints the `streamId` so you can clean up the orphan stream manually in the Coveo console. The source may be stuck in `REBUILD` status until resolved.
+If a step after `stream/open` fails, the script prints the `streamId` so you can close the orphan stream manually in the Coveo console before retrying.
 
 ### Size limit
 
