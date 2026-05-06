@@ -9,6 +9,7 @@ const {
   fetchCatalogIdForWebStore,
   fetchEntitledProductIds,
   fetchPriceByProductId,
+  fetchPromoPriceByProductId,
   fetchVariantParentMap,
   fetchProducts,
   // fetchVariantAttributes,  // unused while attribute source = Product2
@@ -93,7 +94,8 @@ async function main() {
   log(`Site URL:    ${cfg.siteUrl}`);
   log(`WebStore:    ${cfg.webstoreId}`);
   log(`Policy:      ${cfg.policyId}`);
-  log(`Pricebook:   ${cfg.pricebookId}`);
+  log(`Pricebook:         ${cfg.pricebookId}`);
+  log(`Promo Pricebook:   ${cfg.promoPricebookId ?? '(none)'}`);
   log(`Output:      ${cfg.output}`);
   if (cfg.updatedAfter) log(`Updated after: ${cfg.updatedAfter}`);
   if (cfg.limit != null) log(`Limit:       ${cfg.limit}`);
@@ -118,6 +120,13 @@ async function main() {
   const s3 = stageStart('pricing');
   const priceByProduct = await fetchPriceByProductId(client, cfg.pricebookId);
   s3.done(`${priceByProduct.size} PricebookEntry rows`);
+
+  let promoPriceByProduct = null;
+  if (cfg.promoPricebookId) {
+    const sP = stageStart('promo pricing');
+    promoPriceByProduct = await fetchPromoPriceByProductId(client, cfg.promoPricebookId);
+    sP.done(`${promoPriceByProduct.size} promo PricebookEntry rows`);
+  }
 
   const s4 = stageStart('variants');
   const variantParentById = await fetchVariantParentMap(client);
@@ -201,6 +210,7 @@ async function main() {
   let variantCount = 0;
   let simpleCount = 0;
   let unpricedCount = 0;
+  let promoCount = 0;
 
   for (const p of products) {
     if (!p.ProductCode) {
@@ -225,12 +235,18 @@ async function main() {
       });
     }
 
+    const promoPrice =
+      promoPriceByProduct ? (promoPriceByProduct.get(p.Id) ?? null) : null;
+    if (promoPriceByProduct && promoPrice != null) promoCount++;
+
     const doc = buildDocument({
       product: p,
       // productAttr: attrByProduct.get(p.Id) || null,  // revert path: uncomment with the attributes stage above
       categoryPaths: Array.from(pathsByProduct.get(p.Id) || []),
       imageUrls: imagesByProduct.get(p.Id) || null,
       price,
+      promoPrice,
+      emitPromoPrice: promoPriceByProduct !== null,
       variantParentId,
       siteUrl: cfg.siteUrl,
       brand: cfg.brand,
@@ -242,8 +258,9 @@ async function main() {
   const count = await writer.close();
   if (unpricedLog) await unpricedLog.close();
   const unpricedSuffix = cfg.includeUnpriced ? `; ${unpricedCount} without PricebookEntry` : '';
+  const promoSuffix = cfg.promoPricebookId ? `; ${promoCount} with promo price` : '';
   s10.done(
-    `${count} documents written (${simpleCount} Simple, ${variantCount} Variation${unpricedSuffix})`,
+    `${count} documents written (${simpleCount} Simple, ${variantCount} Variation${unpricedSuffix}${promoSuffix})`,
   );
 
   if (missingProductCodeCount > 0) {
