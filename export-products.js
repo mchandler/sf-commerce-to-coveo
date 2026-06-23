@@ -159,11 +159,12 @@ async function main() {
   const s6 = stageStart('products');
   const products = await fetchProducts(client, scopeIds, cfg.updatedAfter);
   const dropped = scope.size - products.length;
-  // The drop can come from three filters in fetchProducts' SOQL:
+  // The drop can come from four filters in fetchProducts' SOQL:
   //   - IsActive = false
+  //   - Active_on_Parts_Store__c != true (false or null)
   //   - ProductClass = 'VariationParent' (excluded by spec rule #3)
   //   - LastModifiedDate < :updatedAfter (when --updated-after is set)
-  const dropNote = dropped > 0 ? ` (${dropped} dropped from scope as inactive, VariationParent, or unchanged)` : '';
+  const dropNote = dropped > 0 ? ` (${dropped} dropped from scope as inactive, not active on Parts Store, VariationParent, or unchanged)` : '';
   s6.done(`${products.length} Product2 rows${dropNote}`);
 
   // Attribute source currently = Product2 (values pulled in fetchProducts
