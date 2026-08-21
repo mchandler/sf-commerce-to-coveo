@@ -52,6 +52,27 @@ node export-products.js \
 | `--limit` | No | Cap the number of products for smoke-testing. Applied after scope filtering; samples randomly when trimmed. |
 | `--include-unpriced` | No | Emit documents for entitled products even when no active `PricebookEntry` exists; missing prices default to `0`. Also writes a sidecar `<output-basename>-unpriced.csv` listing every such product. Useful for surfacing gaps in the pricebook. |
 | `--promo-pricebook-id` | No | Pricebook whose active `PricebookEntry` rows supply `ec_promo_price`. When omitted, `ec_promo_price` is not emitted on any document. When supplied, every document receives `ec_promo_price` set to the matching `UnitPrice`, or `null` when no entry exists for the product. |
+| `--cloudflare-friendly` | No | Build image URLs with the Cloudflare transform options the PDP uses (`fit=scale-down,format=auto,onerror=redirect,width=500`) instead of the bare `format=auto`. See [Image URLs and custom domains](#image-urls-and-custom-domains). |
+
+### Image URLs and custom domains
+
+`ec_images` / `ec_thumbnails` are Cloudflare-transformed CMS URLs, assembled from `--site-url`:
+
+```
+{origin}/cdn-cgi/image/{transform}/{storefrontPath}/sfsites/c/cms/delivery/media/{contentKey}?version=1.1
+```
+
+The storefront path segment comes from `--site-url` — a `*.my.site.com` storefront contributes one (`/AndersenPartsStore`), a custom domain mapped at the root contributes nothing. That part needs no configuration.
+
+The `{transform}` segment does. By default it is `format=auto`, the long-standing Saltbox form. **On a custom domain that transform returns 403 and every image breaks.** Passing `--cloudflare-friendly` swaps in the option set the PDP already uses on those domains:
+
+```
+fit=scale-down,format=auto,onerror=redirect,width=500
+```
+
+The load-bearing option is `onerror=redirect`, which tells Cloudflare to serve the untransformed origin image when the transform fails, so a rejected transform degrades to a working image rather than a 403. `fit=scale-down` never upscales, so `width=500` acts as an upper bound.
+
+The flag belongs on `export-products.js` only. Image URLs are written into the document at export time, so the generated JSON carries them through **both** push paths — `coveo-update.js` and `coveo-full-rebuild.js` push the payload byte-for-byte and never construct a URL. Export with the flag once and every subsequent incremental update inherits the corrected URLs.
 
 ### Output
 
