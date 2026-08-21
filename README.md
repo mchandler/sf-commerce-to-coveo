@@ -52,27 +52,31 @@ node export-products.js \
 | `--limit` | No | Cap the number of products for smoke-testing. Applied after scope filtering; samples randomly when trimmed. |
 | `--include-unpriced` | No | Emit documents for entitled products even when no active `PricebookEntry` exists; missing prices default to `0`. Also writes a sidecar `<output-basename>-unpriced.csv` listing every such product. Useful for surfacing gaps in the pricebook. |
 | `--promo-pricebook-id` | No | Pricebook whose active `PricebookEntry` rows supply `ec_promo_price`. When omitted, `ec_promo_price` is not emitted on any document. When supplied, every document receives `ec_promo_price` set to the matching `UnitPrice`, or `null` when no entry exists for the product. |
-| `--cloudflare-friendly` | No | Build image URLs with the Cloudflare transform options the PDP uses (`fit=scale-down,format=auto,onerror=redirect,width=500`) instead of the bare `format=auto`. See [Image URLs and custom domains](#image-urls-and-custom-domains). |
+| `--custom-domain` | No | The export targets a custom domain. Build image URLs without the `/cdn-cgi/image/` transform segment, which Cloudflare rejects on custom domains. See [Image URLs and custom domains](#image-urls-and-custom-domains). |
 
 ### Image URLs and custom domains
 
-`ec_images` / `ec_thumbnails` are Cloudflare-transformed CMS URLs, assembled from `--site-url`:
+`ec_images` / `ec_thumbnails` are CMS URLs assembled from `--site-url`. On a `*.my.site.com` storefront they route through the Cloudflare image transform:
 
 ```
-{origin}/cdn-cgi/image/{transform}/{storefrontPath}/sfsites/c/cms/delivery/media/{contentKey}?version=1.1
+{origin}/cdn-cgi/image/format=auto/{storefrontPath}/sfsites/c/cms/delivery/media/{contentKey}?version=1.1
 ```
 
 The storefront path segment comes from `--site-url` — a `*.my.site.com` storefront contributes one (`/AndersenPartsStore`), a custom domain mapped at the root contributes nothing. That part needs no configuration.
 
-The `{transform}` segment does. By default it is `format=auto`, the long-standing Saltbox form. **On a custom domain that transform returns 403 and every image breaks.** Passing `--cloudflare-friendly` swaps in the option set the PDP already uses on those domains:
+The `/cdn-cgi/image/format=auto/` segment does. **On a custom domain Cloudflare rejects the transform outright**, answering with `cf-resized: err=9401` ("Transformation origin is not in allowed origins list") — a 403 for the bare `format=auto`, and a 307 back to the untransformed origin for richer option sets. Either way the segment buys nothing on a custom domain except a wasted round trip.
+
+Passing `--custom-domain` drops the segment entirely:
 
 ```
-fit=scale-down,format=auto,onerror=redirect,width=500
+{origin}/{storefrontPath}sfsites/c/cms/delivery/media/{contentKey}?version=1.1
 ```
 
-The load-bearing option is `onerror=redirect`, which tells Cloudflare to serve the untransformed origin image when the transform fails, so a rejected transform degrades to a working image rather than a 403. `fit=scale-down` never upscales, so `width=500` acts as an upper bound.
+Verified 200 `image/png` on `https://parts.stage.andersenwindows.com`.
 
-The flag belongs on `export-products.js` only. Image URLs are written into the document at export time, so the generated JSON carries them through **both** push paths — `coveo-update.js` and `coveo-full-rebuild.js` push the payload byte-for-byte and never construct a URL. Export with the flag once and every subsequent incremental update inherits the corrected URLs.
+Leave the flag off for `*.my.site.com`, where the transform genuinely works — `width=100` shrank a sample image from 10270 to 2589 bytes.
+
+The flag belongs on `export-products.js` only. Image URLs are written into the document at export time, so the generated JSON carries them through **both** push paths — `coveo-update.js` and `coveo-full-rebuild.js` push the payload byte-for-byte and never construct a URL. **The change only takes effect after a re-export**; pushing an existing payload replays whatever URLs it already contains.
 
 ### Output
 

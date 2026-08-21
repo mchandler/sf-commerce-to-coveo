@@ -62,7 +62,7 @@ function shuffle(arr) {
 
 const IMAGE_CONTENT_TYPES = new Set(['cms_image', 'sfdc_cms__image']);
 
-function buildImageUrlsByProduct(mediaRows, siteUrl, cloudflareFriendly) {
+function buildImageUrlsByProduct(mediaRows, siteUrl, customDomain) {
   const grouped = new Map();
   for (const r of mediaRows) {
     if (!r.ContentKey) continue;
@@ -79,7 +79,7 @@ function buildImageUrlsByProduct(mediaRows, siteUrl, cloudflareFriendly) {
   for (const [productId, entries] of grouped.entries()) {
     entries.sort((a, b) => a.sortOrder - b.sortOrder);
     const urls = entries
-      .map((e) => buildImageUrl(siteUrl, e.contentKey, cloudflareFriendly))
+      .map((e) => buildImageUrl(siteUrl, e.contentKey, customDomain))
       .filter((u) => u != null);
     if (urls.length > 0) out.set(productId, urls);
   }
@@ -100,7 +100,7 @@ async function main() {
   if (cfg.updatedAfter) log(`Updated after: ${cfg.updatedAfter}`);
   if (cfg.limit != null) log(`Limit:       ${cfg.limit}`);
   if (cfg.includeUnpriced) log(`Include unpriced: on (ec_price=0 when no PricebookEntry; sidecar CSV emitted)`);
-  log(`Image transform: ${cfg.cloudflareFriendly ? 'cloudflare-friendly (fit=scale-down,format=auto,onerror=redirect,width=500)' : 'default (format=auto)'}`);
+  log(`Image transform: ${cfg.customDomain ? 'none (custom domain — /cdn-cgi/image/ omitted)' : 'cdn-cgi (format=auto)'}`);
   log('');
 
   const session = createSession(cfg.sfOrg);
@@ -201,7 +201,7 @@ async function main() {
 
   const s9 = stageStart('media');
   const mediaRows = await fetchMedia(client, scopeIds);
-  const imagesByProduct = buildImageUrlsByProduct(mediaRows, cfg.siteUrl, cfg.cloudflareFriendly);
+  const imagesByProduct = buildImageUrlsByProduct(mediaRows, cfg.siteUrl, cfg.customDomain);
   s9.done(`${mediaRows.length} ProductMedia rows, ${imagesByProduct.size} products with images`);
 
   const s10 = stageStart('assemble');
