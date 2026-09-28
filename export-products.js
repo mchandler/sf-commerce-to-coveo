@@ -11,6 +11,7 @@ const {
   fetchPriceByProductId,
   fetchPromoPriceByProductId,
   fetchVariantParentMap,
+  fetchProductIdsByCode,
   fetchProducts,
   // fetchVariantAttributes,  // unused while attribute source = Product2
   fetchCategoriesForCatalog,
@@ -98,6 +99,7 @@ async function main() {
   log(`Promo Pricebook:   ${cfg.promoPricebookId ?? '(none)'}`);
   log(`Output:      ${cfg.output}`);
   if (cfg.updatedAfter) log(`Updated after: ${cfg.updatedAfter}`);
+  if (cfg.productCodes) log(`Product codes: ${cfg.productCodes.length} requested`);
   if (cfg.limit != null) log(`Limit:       ${cfg.limit}`);
   if (cfg.includeUnpriced) log(`Include unpriced: on (ec_price=0 when no PricebookEntry; sidecar CSV emitted)`);
   log(`Image transform: ${cfg.customDomain ? 'none (custom domain — /cdn-cgi/image/ omitted)' : 'cdn-cgi (format=auto)'}`);
@@ -134,12 +136,34 @@ async function main() {
   s4.done(`${variantParentById.size} variant→parent pairs`);
 
   const s5 = stageStart('scope');
+  let codeNotFound = [];
+  let codeOutOfScope = [];
   let scope = buildScope({
     entitledParents,
     priceByProduct,
     variantParentById,
     includeUnpriced: cfg.includeUnpriced,
   });
+  let codeNote = '';
+  if (cfg.productCodes) {
+    // SOQL IN on a text field is case-insensitive, so match codes the same
+    // way when reporting which ones were not found or fell outside scope.
+    const codeRows = await fetchProductIdsByCode(client, cfg.productCodes);
+    const foundCodes = new Set(codeRows.map((r) => String(r.ProductCode).toLowerCase()));
+    const inScopeCodes = new Set();
+    const filtered = new Set();
+    for (const r of codeRows) {
+      if (!scope.has(r.Id)) continue;
+      filtered.add(r.Id);
+      inScopeCodes.add(String(r.ProductCode).toLowerCase());
+    }
+    scope = filtered;
+    codeNotFound = cfg.productCodes.filter((c) => !foundCodes.has(c.toLowerCase()));
+    codeOutOfScope = cfg.productCodes.filter(
+      (c) => foundCodes.has(c.toLowerCase()) && !inScopeCodes.has(c.toLowerCase()),
+    );
+    codeNote = ` (filtered to ${cfg.productCodes.length} product code(s))`;
+  }
   const preLimitSize = scope.size;
   let scopeIds = Array.from(scope);
   if (cfg.limit != null && scopeIds.length > cfg.limit) {
@@ -148,7 +172,16 @@ async function main() {
     scope = new Set(scopeIds);
   }
   const sampledNote = preLimitSize > scope.size ? ` (sampled from ${preLimitSize})` : '';
-  s5.done(`${scope.size} products in scope${sampledNote}`);
+  s5.done(`${scope.size} products in scope${codeNote}${sampledNote}`);
+  if (codeNotFound.length > 0) {
+    log(`  ${codeNotFound.length} product code(s) not found in Product2: ${codeNotFound.join(', ')}`);
+  }
+  if (codeOutOfScope.length > 0) {
+    log(
+      `  ${codeOutOfScope.length} product code(s) out of scope (not entitled` +
+      `${cfg.includeUnpriced ? '' : ' or not priced'}): ${codeOutOfScope.join(', ')}`,
+    );
+  }
 
   if (scope.size === 0) {
     log('No products in scope. Exiting.');

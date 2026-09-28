@@ -49,6 +49,7 @@ node export-products.js \
 | `--policy-id` | Yes | `CommerceEntitlementPolicy` Id used to determine entitlement |
 | `--output` | Yes | Path to write the generated JSON file |
 | `--updated-after` | No | ISO-8601 datetime. Restrict output to products with `LastModifiedDate >= :date` |
+| `--product-codes` | No | Comma-delimited list of `ProductCode` values (e.g. `ABC-1,ABC-2`). Restricts output to those products. They must still pass the usual scope and active filters; the run logs any codes that were not found or fell out of scope. Combines with `--updated-after` and `--limit`. |
 | `--limit` | No | Cap the number of products for smoke-testing. Applied after scope filtering; samples randomly when trimmed. |
 | `--include-unpriced` | No | Emit documents for entitled products even when no active `PricebookEntry` exists; missing prices default to `0`. Also writes a sidecar `<output-basename>-unpriced.csv` listing every such product. Useful for surfacing gaps in the pricebook. |
 | `--promo-pricebook-id` | No | Pricebook whose active `PricebookEntry` rows supply `ec_promo_price`. When omitted, `ec_promo_price` is not emitted on any document. When supplied, every document receives `ec_promo_price` set to the matching `UnitPrice`, or `null` when no entry exists for the product. |
