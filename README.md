@@ -50,6 +50,7 @@ node export-products.js \
 | `--output` | Yes | Path to write the generated JSON file |
 | `--updated-after` | No | ISO-8601 datetime. Restrict output to products with `LastModifiedDate >= :date` |
 | `--product-codes` | No | Comma-delimited list of `ProductCode` values (e.g. `ABC-1,ABC-2`). Restricts output to those products. They must still pass the usual scope and active filters; the run logs any codes that were not found or fell out of scope. Combines with `--updated-after` and `--limit`. |
+| `--product-code-deletes` | No | Comma-delimited list of `ProductCode` values to **delete from Coveo**. See [Deleting products](#deleting-products). |
 | `--limit` | No | Cap the number of products for smoke-testing. Applied after scope filtering; samples randomly when trimmed. |
 | `--include-unpriced` | No | Emit documents for entitled products even when no active `PricebookEntry` exists; missing prices default to `0`. Also writes a sidecar `<output-basename>-unpriced.csv` listing every such product. Useful for surfacing gaps in the pricebook. |
 | `--promo-pricebook-id` | No | Pricebook whose active `PricebookEntry` rows supply `ec_promo_price`. When omitted, `ec_promo_price` is not emitted on any document. When supplied, every document receives `ec_promo_price` set to the matching `UnitPrice`, or `null` when no entry exists for the product. |
@@ -79,15 +80,40 @@ Leave the flag off for `*.my.site.com`, where the transform genuinely works — 
 
 The flag belongs on `export-products.js` only. Image URLs are written into the document at export time, so the generated JSON carries them through **both** push paths — `coveo-update.js` and `coveo-full-rebuild.js` push the payload byte-for-byte and never construct a URL. **The change only takes effect after a re-export**; pushing an existing payload replays whatever URLs it already contains.
 
+### Deleting products
+
+`--product-code-deletes` writes a `delete` array into the payload. Push it with `coveo-update.js` (incremental); only the listed products are removed and everything else in the source is untouched.
+
+```
+node export-products.js \
+  --site-url https://myorg--sandbox.sandbox.my.site.com/MyStore \
+  --brand Nabisco --pricebook-id 01sXXXXXXXXXXXXXXX --sf-org MySFOrg \
+  --webstore-id 0ZEXXXXXXXXXXXXXXX --policy-id 1CeXXXXXXXXXXXXXXX \
+  --product-code-deletes ABC-1,ABC-2 \
+  --output ./coveo-deletes.json
+
+node coveo-update.js --input ./coveo-deletes.json --org-id <id> --source-id <id>
+```
+
+- **Delete-only vs. combined.** With `--product-code-deletes` as the only selection flag, the file contains only `{ "delete": [ ... ] }`. Combined with `--product-codes` or `--updated-after`, the file carries both `addOrUpdate` and `delete`; any product being deleted is dropped from `addOrUpdate`. `--limit` does not apply to deletes.
+- **Entry shape.** Each entry is `{ "documentId": "<site-url>/product/<Product2.Id>", "deleteChildren": false }`, built exactly as `addOrUpdate` documents build their `documentId`.
+- **`--site-url` must match the index.** The `documentId` embeds `--site-url`, so it must be the same URL the documents were indexed under (custom domain vs. `*.my.site.com` produce different ids). A mismatched delete is accepted by Coveo and silently removes nothing. The run logs one sample `documentId` so you can compare it against the index.
+- **Lookup ignores scope.** Codes are resolved against all of Product2, regardless of entitlement, pricing, `IsActive`, or `Active_on_Parts_Store__c`, since the products being removed typically no longer pass those filters.
+- **Logged cases.** Codes not found in Product2; codes matching several Product2 rows (each one is deleted); `VariationParent` codes (never indexed, so skipped — list the variant codes to remove variants); and a **warning** for codes that still pass the export filters, since the next update run would re-add them.
+- A code listed in both `--product-codes` and `--product-code-deletes` (case-insensitive) is an error.
+- `--pricebook-id` and `--policy-id` remain required; they feed the "would be re-added" check.
+
+**Never push a delete-only payload with `coveo-full-rebuild.js`** — a full rebuild with no `addOrUpdate` documents would empty the source. `coveo-full-rebuild.js` refuses any payload with an empty `addOrUpdate`.
+
 ### Output
 
-- `<output>.json` — the Coveo payload, shaped as `{ "addOrUpdate": [ ... ] }`
+- `<output>.json` — the Coveo payload, shaped as `{ "addOrUpdate": [ ... ] }`, plus a `"delete": [ ... ]` array when `--product-code-deletes` is used (delete-only runs omit `addOrUpdate`)
 - `<output-basename>-unpriced.csv` — sidecar CSV of unpriced products (only when `--include-unpriced` is set and at least one product is unpriced)
 - Stderr log — stage-level counts, timing, and per-product warnings
 
 ## 2. Incremental push — `coveo-update.js`
 
-Uploads an existing payload as an incremental update to a Coveo push source. Documents in the file are added or updated; **documents already in the source but not in the file are left alone**. Pair with `export-products.js --updated-after` for recurring delta runs.
+Uploads an existing payload as an incremental update to a Coveo push source. Documents in the file are added or updated; **documents already in the source but not in the file are left alone**. Entries in the file's `delete` array are removed from the source. Pair with `export-products.js --updated-after` for recurring delta runs, or `--product-code-deletes` to remove specific products.
 
 ```
 node coveo-update.js \
@@ -117,6 +143,8 @@ node coveo-update.js \
 ## 3. Full rebuild — `coveo-full-rebuild.js`
 
 **Destructive.** Replaces the contents of the Coveo source with the supplied payload. Any document currently in the source that is not in the payload will be deleted from the index.
+
+The script refuses a payload with no `addOrUpdate` documents (e.g. a `--product-code-deletes` delete-only export), since that would empty the source.
 
 Before the push starts, the script will **interactively prompt you to type the source Id** to confirm. That check is re-requested on every run and cannot be satisfied by shell history or re-running the same command.
 

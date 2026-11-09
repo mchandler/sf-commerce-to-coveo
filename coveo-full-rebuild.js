@@ -83,6 +83,16 @@ async function main() {
   const { bytes, addOrUpdate, del } = loadPayload(cfg.input);
   s1.done(`${formatBytes(bytes.length)} | ${addOrUpdate.length} addOrUpdate, ${del.length} delete`);
 
+  // A full rebuild deletes every document not in addOrUpdate, so a payload
+  // without any (e.g. a --product-code-deletes delete-only export) would
+  // empty the source. Refuse before the dry-run plan or the confirm prompt.
+  if (addOrUpdate.length === 0) {
+    throw new Error(
+      'Input has no "addOrUpdate" documents. A full rebuild would delete every document ' +
+      'in the source. Push delete-only payloads with coveo-update.js instead.',
+    );
+  }
+
   if (bytes.length > MAX_FILE_BYTES) {
     throw new Error(
       `Input is ${formatBytes(bytes.length)} which exceeds Coveo's ` +

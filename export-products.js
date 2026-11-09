@@ -12,6 +12,7 @@ const {
   fetchPromoPriceByProductId,
   fetchVariantParentMap,
   fetchProductIdsByCode,
+  fetchProductsForDelete,
   fetchProducts,
   // fetchVariantAttributes,  // unused while attribute source = Product2
   fetchCategoriesForCatalog,
@@ -53,6 +54,59 @@ function buildScope({ entitledParents, priceByProduct, variantParentById, includ
 // Fisher–Yates in place. Used only when --limit is applied, so a small
 // limit still samples across entitled parents AND their variant children
 // rather than taking the first N insertion entries (which are all parents).
+// Resolves --product-code-deletes into Coveo delete entries. Logs codes with
+// no Product2 match, codes shared by several Product2 rows, VariationParents
+// (never indexed, so skipped), and codes that still pass the export filters
+// (the next update run would re-add them).
+async function buildDeletes(client, cfg, fullScope) {
+  const rows = await fetchProductsForDelete(client, cfg.productCodeDeletes);
+
+  const rowsByCode = new Map();
+  for (const r of rows) {
+    const key = String(r.ProductCode).toLowerCase();
+    let arr = rowsByCode.get(key);
+    if (!arr) rowsByCode.set(key, (arr = []));
+    arr.push(r);
+  }
+
+  const notFound = [];
+  const duplicates = [];
+  const variationParents = [];
+  const stillExported = [];
+  const deletes = [];
+  const deleteIds = new Set();
+
+  for (const code of cfg.productCodeDeletes) {
+    const matches = rowsByCode.get(code.toLowerCase());
+    if (!matches) {
+      notFound.push(code);
+      continue;
+    }
+    if (matches.length > 1) duplicates.push(`${code} (${matches.map((r) => r.Id).join(', ')})`);
+    for (const r of matches) {
+      if (deleteIds.has(r.Id)) continue;
+      if (r.ProductClass === 'VariationParent') {
+        variationParents.push(`${code} (${r.Id})`);
+        continue;
+      }
+      // Same filters fetchProducts applies, minus --updated-after: would a
+      // future export run emit this product again?
+      if (
+        fullScope.has(r.Id) &&
+        r.IsActive === true &&
+        r.Active_on_Parts_Store__c === true
+      ) {
+        stillExported.push(`${code} (${r.Id})`);
+      }
+      deleteIds.add(r.Id);
+      // Must match lib/document.js buildDocument exactly.
+      deletes.push({ documentId: `${cfg.siteUrl}/product/${r.Id}`, deleteChildren: false });
+    }
+  }
+
+  return { deletes, deleteIds, notFound, duplicates, variationParents, stillExported };
+}
+
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -100,6 +154,10 @@ async function main() {
   log(`Output:      ${cfg.output}`);
   if (cfg.updatedAfter) log(`Updated after: ${cfg.updatedAfter}`);
   if (cfg.productCodes) log(`Product codes: ${cfg.productCodes.length} requested`);
+  if (cfg.productCodeDeletes) {
+    log(`Product code deletes: ${cfg.productCodeDeletes.length} requested${cfg.deletesOnly ? ' (delete-only payload)' : ''}`);
+  }
+  if (cfg.deletesOnly && cfg.limit != null) log(`Limit:       ignored (delete-only payload)`);
   if (cfg.limit != null) log(`Limit:       ${cfg.limit}`);
   if (cfg.includeUnpriced) log(`Include unpriced: on (ec_price=0 when no PricebookEntry; sidecar CSV emitted)`);
   log(`Image transform: ${cfg.customDomain ? 'none (custom domain — /cdn-cgi/image/ omitted)' : 'cdn-cgi (format=auto)'}`);
@@ -144,6 +202,9 @@ async function main() {
     variantParentById,
     includeUnpriced: cfg.includeUnpriced,
   });
+  // Unfiltered scope, kept for the --product-code-deletes "would be re-added"
+  // check, which asks about future broad runs, not this run's code filter.
+  const fullScope = scope;
   let codeNote = '';
   if (cfg.productCodes) {
     // SOQL IN on a text field is case-insensitive, so match codes the same
@@ -183,10 +244,62 @@ async function main() {
     );
   }
 
+  let deletes = [];
+  if (cfg.productCodeDeletes) {
+    const sD = stageStart('deletes');
+    const d = await buildDeletes(client, cfg, fullScope);
+    deletes = d.deletes;
+    sD.done(`${deletes.length} delete documentId(s) from ${cfg.productCodeDeletes.length} product code(s)`);
+    if (deletes.length > 0) {
+      log(`  Sample documentId: ${deletes[0].documentId}`);
+      log('  (must match the indexed documentId exactly — check --site-url)');
+    }
+    if (d.notFound.length > 0) {
+      log(`  ${d.notFound.length} delete code(s) not found in Product2: ${d.notFound.join(', ')}`);
+    }
+    if (d.duplicates.length > 0) {
+      log(`  ${d.duplicates.length} delete code(s) matched several Product2 rows (all deleted): ${d.duplicates.join('; ')}`);
+    }
+    if (d.variationParents.length > 0) {
+      log(
+        `  ${d.variationParents.length} delete code(s) are VariationParents, which are never indexed — ` +
+        `skipped; their variants were NOT deleted: ${d.variationParents.join('; ')}`,
+      );
+    }
+    if (d.stillExported.length > 0) {
+      log(
+        `  WARNING: ${d.stillExported.length} delete code(s) still pass the export filters ` +
+        `(entitled, ${cfg.includeUnpriced ? '' : 'priced, '}active, active on Parts Store) — ` +
+        `the next update run would re-add them: ${d.stillExported.join('; ')}`,
+      );
+    }
+
+    if (!cfg.deletesOnly) {
+      // Never emit a product in both arrays of one payload.
+      const dropped = scopeIds.filter((id) => d.deleteIds.has(id));
+      if (dropped.length > 0) {
+        scopeIds = scopeIds.filter((id) => !d.deleteIds.has(id));
+        scope = new Set(scopeIds);
+        log(`  ${dropped.length} product(s) being deleted were removed from addOrUpdate`);
+      }
+    }
+  }
+
+  if (cfg.deletesOnly) {
+    const writer = createStreamWriter(cfg.output, { includeAddOrUpdate: false });
+    await writer.close(deletes);
+    log('');
+    log(`Wrote ${deletes.length} delete entries (no addOrUpdate) to ${cfg.output}`);
+    log('Push with coveo-update.js (incremental). Do NOT use coveo-full-rebuild.js.');
+    log(`Total elapsed: ${formatDuration(Date.now() - started)}`);
+    return;
+  }
+
   if (scope.size === 0) {
     log('No products in scope. Exiting.');
     const writer = createStreamWriter(cfg.output);
-    await writer.close();
+    await writer.close(deletes);
+    if (deletes.length > 0) log(`Wrote 0 documents and ${deletes.length} delete entries to ${cfg.output}`);
     return;
   }
 
@@ -290,7 +403,7 @@ async function main() {
     writer.write(doc);
   }
 
-  const count = await writer.close();
+  const count = await writer.close(deletes);
   if (unpricedLog) await unpricedLog.close();
   const unpricedSuffix = cfg.includeUnpriced ? `; ${unpricedCount} without PricebookEntry` : '';
   const promoSuffix = cfg.promoPricebookId ? `; ${promoCount} with promo price` : '';
@@ -307,7 +420,7 @@ async function main() {
   }
 
   log('');
-  log(`Wrote ${count} documents to ${cfg.output}`);
+  log(`Wrote ${count} documents${deletes.length > 0 ? ` and ${deletes.length} delete entries` : ''} to ${cfg.output}`);
   if (unpricedLog && unpricedLog.count > 0) {
     log(`Wrote ${unpricedLog.count} unpriced rows to ${unpricedLog.file}`);
   }
